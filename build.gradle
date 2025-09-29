@@ -1,0 +1,126 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.text.SimpleDateFormat
+
+plugins {
+    id 'idea'
+    id 'java'
+    id 'application'
+    id 'com.google.osdetector'        version '1.7.3'
+    id 'net.nemerosa.versioning'      version '3.1.0'
+    id 'com.vanniktech.maven.publish' version '0.34.0'
+}
+
+description = 'JDKUpdaterFX is a tool to find updates for OpenJDK distributions installed on your machine'
+
+
+Date buildTimeAndDate = new Date()
+ext {
+    moduleName      = 'eu.hansolo.jdkupdaterfx'
+    buildDate       = new SimpleDateFormat('yyyy-MM-dd').format(buildTimeAndDate)
+    buildTime       = new SimpleDateFormat('HH:mm:ss.SSSZ').format(buildTimeAndDate)
+    platform        = osdetector.os == 'osx' ? osdetector.arch == 'aarch_64' ? 'mac-aarch64' : 'mac' : osdetector.os == 'windows' ? 'win' : osdetector.os == 'linux' ? osdetector.arch == 'aarch_64' ? 'linux-aarch64' : 'linux' : osdetector.os
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation "org.openjfx:javafx-base:${javafxVersion}:${platform}"
+    implementation "org.openjfx:javafx-graphics:${javafxVersion}:${platform}"
+    implementation "org.openjfx:javafx-controls:${javafxVersion}:${platform}"
+    implementation "org.openjfx:javafx-swing:${javafxVersion}:${platform}"
+    implementation "eu.hansolo:jdktools:21.0.21"
+    implementation "eu.hansolo:applefx:25.0.0"
+    implementation "eu.hansolo:toolbox:21.0.25"
+}
+
+application {
+    mainClass  = 'eu.hansolo.jdkupdaterfx.Launcher'
+    mainModule = 'eu.hansolo.jdkupdaterfx'
+}
+
+jar {
+    from {
+        //duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+        //configurations.runtimeClasspath.collect {  it.isDirectory() ? it : zipTree(it)  }
+    } {
+        exclude "META-INF/*.SF"
+        exclude "META-INF/*.DSA"
+        exclude "META-INF/*.RSA"
+    }
+    manifest {
+        attributes(
+                'Built-By'              : System.properties['user.name'],
+                'Created-By'            : System.properties['java.version'] + " (" + System.properties['java.vendor'] + " " + System.properties['java.vm.version'] + ")",
+                'Build-Date'            : project.buildDate,
+                'Build-Time'            : project.buildTime,
+                'Build-Revision'        : versioning.info.commit,
+                'Specification-Title'   : project.name,
+                'Specification-Version' : project.version,
+                'Implementation-Title'  : project.name,
+                'Implementation-Version': project.version,
+                'Bundle-Name'           : project.name,
+                'Bundle-License'        : 'https://www.apache.org/licenses/LICENSE-2.0;description=Apache License Version 2.0;link=https://spdx.org/licenses/Apache-2.0.html',
+                'Bundle-Description'    : project.description,
+                'Bundle-SymbolicName'   : 'eu.hansolo.jdkupdaterfx',
+                'Export-Package'        : 'eu.hansolo.jdkupdaterfx',
+                'Class-Path'            : "${project.name}-${project.version}.jar",
+                'Main-Class'            : application.mainClass
+        )
+    }
+}
+
+
+if (JavaVersion.current().isJava8Compatible()) {
+    allprojects {
+        tasks.withType(Javadoc) {
+            options.addStringOption('Xdoclint:none', '-quiet')
+        }
+    }
+}
+
+
+// start the from gradle
+tasks.register('Main', JavaExec) {
+    mainClass = "eu.hansolo.jdkupdaterfx.Launcher"
+    classpath = sourceSets.main.runtimeClasspath
+}
+
+// create one jar for the javadoc
+
+tasks.register('javadocJar', Jar) {
+    dependsOn javadoc
+    archiveClassifier = 'javadoc'
+    from javadoc.destinationDir
+}
+
+// create one jar for the source files
+tasks.register('sourcesJar', Jar) {
+    dependsOn classes
+    archiveClassifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+artifacts {
+    archives jar
+    archives javadocJar
+    archives sourcesJar
+}
+
+tasks.withType(GenerateModuleMetadata).configureEach {
+    doLast { _ ->
+        def gmmFile = it.outputFile.get().asFile
+        def inJson = new JsonSlurper().parseText(gmmFile.text)
+        def filteredVariant = inJson.variants.findAll { it.name == configurations.runtimeElements.name }
+        // remove "thirdPartyCompatibility" from GMM
+        filteredVariant.dependencies.first().each {
+            if (it.group == 'org.openjfx') {
+                it.remove('thirdPartyCompatibility')
+            }
+        }
+        def outJson = JsonOutput.toJson(inJson)
+        gmmFile.write(JsonOutput.prettyPrint(outJson))
+    }
+}
